@@ -37,9 +37,10 @@ class PositionalEncoding(nn.Module):
         # less than 5 lines of code.                                               #
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-        pass
-
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp((-torch.arange(0, embed_dim, 2) / embed_dim) * math.log(10000.0))
+        pe[:,:,0::2] = torch.sin(position * div_term)
+        pe[:,:,1::2] = torch.cos(position * div_term)
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -69,9 +70,8 @@ class PositionalEncoding(nn.Module):
         # afterward. This should only take a few lines of code.                    #
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-        pass
-
+        output = x + self.pe[:,:S,:]
+        output = self.dropout(output)
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -147,6 +147,7 @@ class MultiHeadAttention(nn.Module):
         """
         N, S, E = query.shape
         N, T, E = value.shape
+        H, HE = (self.n_head, self.head_dim)
         # Create a placeholder, to be overwritten by your code below.
         output = torch.empty((N, S, E))
         ############################################################################
@@ -164,9 +165,22 @@ class MultiHeadAttention(nn.Module):
         #     function masked_fill may come in handy.                              #
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+        Q = self.query(query)
+        K = self.key(key)
+        V = self.value(value)
+        
+        Q = Q.reshape(N, S, H, HE).transpose(1, 2)
+        K = K.reshape(N, T, H, HE).transpose(1, 2)
+        V = V.reshape(N, T, H, HE).transpose(1, 2)
 
-        pass
-
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / (HE ** 0.5)
+        if attn_mask is not None:
+          scores = scores.masked_fill(attn_mask.unsqueeze(0).unsqueeze(0) == 0, float('-inf'))
+        
+        attn_weights = torch.softmax(scores, dim=-1)
+        attn_weights = self.attn_drop(attn_weights)
+        context = torch.matmul(attn_weights, V).transpose(1, 2).reshape(N, S, E)
+        output = self.proj(context)
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
