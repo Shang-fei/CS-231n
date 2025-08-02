@@ -147,9 +147,25 @@ class CaptioningRNN:
         # in your implementation, if needed.                                       #
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+        h0, features_trans_cache = affine_forward(features, W_proj, b_proj) 
+        x, embed_cache = word_embedding_forward(captions_in, W_embed)
+        h, caches = rnn_forward(x, h0, Wx, Wh, b)
+        scores, out_cache = temporal_affine_forward(h, W_vocab, b_vocab)
 
-        pass
-
+        loss, dout = temporal_softmax_loss(scores, captions_out, mask)
+        dh, dW_vocab, db_vocab = temporal_affine_backward(dout, out_cache)
+        dx, dh0, dWx, dWh, db = rnn_backward(dh, caches)
+        _, dW_proj, db_proj = affine_backward(dh0, features_trans_cache)
+        dW_embed = word_embedding_backward(dx, embed_cache)
+        
+        grads["W_vocab"] = dW_vocab
+        grads["b_vocab"] = db_vocab
+        grads["Wx"] = dWx
+        grads["Wh"] = dWh
+        grads["b"] = db
+        grads["W_proj"] = dW_proj
+        grads["b_proj"] = db_proj
+        grads["W_embed"] = dW_embed
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -215,9 +231,14 @@ class CaptioningRNN:
         # you are using an LSTM, initialize the first cell state to zeros.        #
         ###########################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-        pass
-
+        captions[:, 0] = self._start
+        h, _ = affine_forward(features, W_proj, b_proj)
+        for t in range(max_length-1):
+            x, _ = word_embedding_forward(captions[:,t], W_embed)
+            h, _ =  rnn_step_forward(x, h, Wx, Wh, b)
+            out, _ = affine_forward(h, W_vocab, b_vocab)
+            captions[:, t+1] = np.argmax(out, axis=1)
+      
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
