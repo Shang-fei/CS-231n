@@ -273,12 +273,21 @@ def batchnorm_backward(dout, cache):
     ###########################################################################
     x, x_norm, mean, var, gamma, beta, eps = cache
     N, D = x.shape
-    dx_norm = dout * gamma
-    dvar = np.sum(dx_norm * -0.5 * (x - mean) * (var + eps) ** -1.5, axis=0)
-    dmean = np.sum(dx_norm*-1/np.sqrt(var+eps), axis=0) + dvar*np.mean(-2*(x-mean), axis=0)
-    dx = dx_norm / np.sqrt(var + eps) + dvar * 2 * (x - mean) / N + dmean / N
+
+    dbeta = np.sum(dout, axis=0) 
     dgamma = np.sum(dout * x_norm, axis=0)
-    dbeta = np.sum(dout, axis=0)
+    dx_norm = dout * gamma
+    dv9 = np.sum(dx_norm * ((mean - x) / (var + eps)), axis=0)
+    dv8 = dv9 / (2 * np.sqrt(var + eps))
+    dv7 = dv8 / N
+    dv6 = np.broadcast_to(dv7, (N, D))
+    dv5 = dv6 * 2 * (x - mean)
+    dv4 = dx_norm / np.sqrt(var + eps)
+    dv3 = dv5 + dv4
+    dv2 = -np.sum(dv3, axis=0)
+    dv1 = dv2 / N
+    dx = dv3 + np.broadcast_to(dv1, (N, D))
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -312,8 +321,8 @@ def batchnorm_backward_alt(dout, cache):
     N, D = x.shape
     dx_norm = dout * gamma
     dvar = np.sum(dx_norm * -0.5 * (x - mean) * (var + eps) ** -1.5, axis=0)
-    dmean = np.sum(dx_norm*-1/np.sqrt(var+eps), axis=0) + dvar*np.mean(-2*(x-mean), axis=0)
-    dx = dx_norm / np.sqrt(var + eps) + dvar * 2 * (x - mean) / N + dmean / N
+    dmean = -np.sum(dx_norm / np.sqrt(var + eps), axis=0)+ dvar * -2 / N * np.sum(x - mean, axis=0)
+    dx = dx_norm / np.sqrt(var + eps) + dmean / N + dvar * 2 * (x - mean) / N
     dgamma = np.sum(dout * x_norm, axis=0)
     dbeta = np.sum(dout, axis=0)
     ###########################################################################
