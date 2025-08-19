@@ -64,11 +64,11 @@ def image_from_url(url):
         img = imread(fname)
         os.remove(fname)
         return img
-    except urllib.error.URLError as e:
+    except urllib.error.URLError as e: 
         print("URL Error: ", e.reason, url)
     except urllib.error.HTTPError as e:
-        print("HTTP Error: ", e.code, url)
-
+        print("HTTP Error: ", e.code, url) 
+ 
 
 def load_image(filename, size=None):
     """Load and resize an image from disk.

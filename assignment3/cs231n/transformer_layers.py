@@ -36,12 +36,11 @@ class PositionalEncoding(nn.Module):
         # this is what the autograder is expecting. For reference, our solution is #
         # less than 5 lines of code.                                               #
         ############################################################################
-        # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp((-torch.arange(0, embed_dim, 2) / embed_dim) * math.log(10000.0))
-        pe[:,:,0::2] = torch.sin(position * div_term)
-        pe[:,:,1::2] = torch.cos(position * div_term)
-        # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+        position = torch.arange(max_len).unsqueeze(1)  # (max_len, 1)
+        div_term = torch.exp(torch.arange(0, embed_dim, 2) * (-math.log(10000.0) / embed_dim))
+        
+        pe[0, :, 0::2] = torch.sin(position * div_term)  # even indices
+        pe[0, :, 1::2] = torch.cos(position * div_term)  # odd indices
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -69,15 +68,12 @@ class PositionalEncoding(nn.Module):
         # appropriate ones to the input sequence. Don't forget to apply dropout    #
         # afterward. This should only take a few lines of code.                    #
         ############################################################################
-        # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-        output = x + self.pe[:,:S,:]
+        output = x + self.pe[:, :S, :]
         output = self.dropout(output)
-        # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
         return output
-
 
 class MultiHeadAttention(nn.Module):
     """
@@ -147,7 +143,6 @@ class MultiHeadAttention(nn.Module):
         """
         N, S, E = query.shape
         N, T, E = value.shape
-        H, HE = (self.n_head, self.head_dim)
         # Create a placeholder, to be overwritten by your code below.
         output = torch.empty((N, S, E))
         ############################################################################
@@ -164,27 +159,258 @@ class MultiHeadAttention(nn.Module):
         #     prevent a value from influencing output. Specifically, the PyTorch   #
         #     function masked_fill may come in handy.                              #
         ############################################################################
-        # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-        Q = self.query(query)
-        K = self.key(key)
-        V = self.value(value)
+        H = self.n_head
+        D = self.head_dim
+        Q = self.query(query).view(N, S, H, D)
+        K = self.key(key).view(N, T, H, D)
+        V = self.value(value).view(N, T, H, D)
+        Q = Q.permute(0, 2, 1, 3)
+        K = K.permute(0, 2, 1, 3)
+        V = V.permute(0, 2, 1, 3) 
         
-        Q = Q.reshape(N, S, H, HE).transpose(1, 2)
-        K = K.reshape(N, T, H, HE).transpose(1, 2)
-        V = V.reshape(N, T, H, HE).transpose(1, 2)
-
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / (HE ** 0.5)
-        if attn_mask is not None:
-          scores = scores.masked_fill(attn_mask.unsqueeze(0).unsqueeze(0) == 0, float('-inf'))
+        # [N, H, S, T]   
+        att = torch.matmul(Q, K.transpose(-1, -2)) / (D ** 0.5)
         
-        attn_weights = torch.softmax(scores, dim=-1)
-        attn_weights = self.attn_drop(attn_weights)
-        context = torch.matmul(attn_weights, V).transpose(1, 2).reshape(N, S, E)
-        output = self.proj(context)
-        # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+        if attn_mask != None:   
+          att.masked_fill_(attn_mask == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        
+        # [N, H, S, D]
+        out = torch.matmul(att, V)
+        out = out.permute(0, 2, 1, 3)
+        out = out.reshape(N, S, E) 
+        out = self.proj(out)
+        output = out 
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
         return output
 
 
+class FeedForwardNetwork(nn.Module):
+    def __init__(self, embed_dim, ffn_dim, dropout=0.1):
+        """
+        Simple two-layer feed-forward network with dropout and ReLU activation.
+
+        Inputs:
+         - embed_dim: Dimension of input and output embeddings
+         - ffn_dim: Hidden dimension in the feedforward network
+         - dropout: Dropout probability
+        """
+        super().__init__()
+        self.fc1 = nn.Linear(embed_dim, ffn_dim)
+        self.gelu = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(ffn_dim, embed_dim)
+
+    def forward(self, x):
+        """
+        Forward pass for the feedforward network.
+
+        Inputs:
+        - x: Input tensor of shape (N, T, D)
+
+        Returns:
+        - out: Output tensor of the same shape as input
+        """
+        out = torch.empty_like(x)
+
+        out = self.fc1(x)
+        out = self.gelu(out)
+        out = self.dropout(out)
+        out = self.fc2(out)
+
+        return out
+
+
+class TransformerDecoderLayer(nn.Module):
+    """
+    A single layer of a Transformer decoder, to be used with TransformerDecoder.
+    """
+    def __init__(self, input_dim, num_heads, dim_feedforward=2048, dropout=0.1):
+        """
+        Construct a TransformerDecoderLayer instance.
+
+        Inputs:
+         - input_dim: Number of expected features in the input.
+         - num_heads: Number of attention heads
+         - dim_feedforward: Dimension of the feedforward network model.
+         - dropout: The dropout value.
+        """
+        super().__init__()
+        self.self_attn = MultiHeadAttention(input_dim, num_heads, dropout)
+        self.cross_attn = MultiHeadAttention(input_dim, num_heads, dropout)
+        self.ffn = FeedForwardNetwork(input_dim, dim_feedforward, dropout)
+
+        self.norm_self = nn.LayerNorm(input_dim)
+        self.norm_cross = nn.LayerNorm(input_dim)
+        self.norm_ffn = nn.LayerNorm(input_dim)
+
+        self.dropout_self = nn.Dropout(dropout)
+        self.dropout_cross = nn.Dropout(dropout)
+        self.dropout_ffn = nn.Dropout(dropout)
+
+
+    def forward(self, tgt, memory, tgt_mask=None):
+        """
+        Pass the inputs (and mask) through the decoder layer.
+
+        Inputs:
+        - tgt: the sequence to the decoder layer, of shape (N, T, D)
+        - memory: the sequence from the last layer of the encoder, of shape (N, S, D)
+        - tgt_mask: the parts of the target sequence to mask, of shape (T, T)
+
+        Returns:
+        - out: the Transformer features, of shape (N, T, W)
+        """
+
+        # Self-attention block (reference implementation)
+        shortcut = tgt
+        tgt = self.self_attn(query=tgt, key=tgt, value=tgt, attn_mask=tgt_mask)
+        tgt = self.dropout_self(tgt)
+        tgt = tgt + shortcut
+        tgt = self.norm_self(tgt)
+
+        ############################################################################
+        # TODO: Complete the decoder layer by implementing the remaining two       #
+        # sublayers: (1) the cross-attention block using the encoder output as     #
+        # memory, and (2) the feedforward block. Each block should follow the      #
+        # same structure as self-attention implemented just above.                 #
+        ############################################################################
+        shortcut = tgt
+        tgt = self.cross_attn(query=tgt, key=memory, value=memory)
+        tgt = self.dropout_cross(tgt)
+        tgt = tgt + shortcut
+        tgt = self.norm_self(tgt)
+        
+        shortcut = tgt 
+        tgt = self.ffn(tgt)
+        tgt = self.dropout_ffn(tgt)
+        tgt = tgt + shortcut
+        tgt = self.norm_ffn(tgt) 
+        ############################################################################
+        #                             END OF YOUR CODE                             #
+        ############################################################################
+
+        return tgt
+
+
+class PatchEmbedding(nn.Module):
+    """
+    A layer that splits an image into patches and projects each patch to an embedding vector.
+    Used as the input layer of a Vision Transformer (ViT).
+
+    Inputs:
+    - img_size: Integer representing the height/width of input image (assumes square image).
+    - patch_size: Integer representing height/width of each patch (square patch).
+    - in_channels: Number of input image channels (e.g., 3 for RGB).
+    - embed_dim: Dimension of the linear embedding space.
+    """
+    def __init__(self, img_size, patch_size, in_channels=3, embed_dim=128):
+        super().__init__()
+
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.embed_dim = embed_dim
+
+        assert img_size % patch_size == 0, "Image dimensions must be divisible by the patch size."
+
+        self.num_patches = (img_size // patch_size) ** 2
+        self.patch_dim = patch_size * patch_size * in_channels
+
+        # Linear projection of flattened patches to the embedding dimension
+        self.proj = nn.Linear(self.patch_dim, embed_dim)
+
+
+    def forward(self, x):
+        """
+        Forward pass for patch embedding.
+
+        Inputs:
+        - x: Input image tensor of shape (N, C, H, W)
+
+        Returns:
+        - out: Patch embeddings with positional encodings of shape (N, num_patches, embed_dim)
+        """
+        N, C, H, W = x.shape
+        assert H == self.img_size and W == self.img_size, \
+            f"Expected image size ({self.img_size}, {self.img_size}), but got ({H}, {W})"
+        out = torch.zeros(N, self.embed_dim)
+
+        ############################################################################
+        # TODO: Divide the image into non-overlapping patches of shape             #
+        # (patch_size x patch_size x C), and rearrange them into a tensor of       #
+        # shape (N, num_patches, patch_dim). Do not use a for-loop.                #
+        # Instead, you may find torch.reshape and torch.permute helpful for this   #
+        # step. Once the patches are flattened, embed them into latent vectors     #
+        # using the projection layer.                                              #
+        ############################################################################ 
+        out = x.reshape(N, C, H // self.patch_size, self.patch_size, W // self.patch_size, self.patch_size)
+        out = out.permute(0, 2, 4, 1, 3, 5)
+        out = out.reshape(N, self.num_patches, -1)
+        out = self.proj(out) # [N, P, E]
+        ############################################################################
+        #                             END OF YOUR CODE                             #
+        ############################################################################
+        return out
+
+
+
+
+class TransformerEncoderLayer(nn.Module):
+    """
+    A single layer of a Transformer encoder, to be used with TransformerEncoder.
+    """
+    def __init__(self, input_dim, num_heads, dim_feedforward=2048, dropout=0.1):
+        """
+        Construct a TransformerEncoderLayer instance.
+
+        Inputs:
+         - input_dim: Number of expected features in the input.
+         - num_heads: Number of attention heads.
+         - dim_feedforward: Dimension of the feedforward network model.
+         - dropout: The dropout value.
+        """
+        super().__init__()
+        self.self_attn = MultiHeadAttention(input_dim, num_heads, dropout)
+        self.ffn = FeedForwardNetwork(input_dim, dim_feedforward, dropout)
+
+        self.norm_self = nn.LayerNorm(input_dim)
+        self.norm_ffn = nn.LayerNorm(input_dim)
+
+        self.dropout_self = nn.Dropout(dropout)
+        self.dropout_ffn = nn.Dropout(dropout)
+
+    def forward(self, src, src_mask=None):
+        """
+        Pass the inputs (and mask) through the encoder layer.
+
+        Inputs:
+        - src: the sequence to the encoder layer, of shape (N, S, D)
+        - src_mask: the parts of the source sequence to mask, of shape (S, S)
+
+        Returns:
+        - out: the Transformer features, of shape (N, S, D)
+        """
+        ############################################################################
+        # TODO: Implement the encoder layer by applying self-attention followed    #
+        # by a feedforward block. This code will be very similar to decoder layer. #
+        ############################################################################
+        N, S, D = src.shape
+        shortcut = src
+        src = self.self_attn(src, src, src, src_mask)
+        src = self.dropout_self(src)
+        src = src + shortcut
+        src = self.norm_self(src)
+        
+        shortcut = src
+        src = self.ffn(src)
+        src = self.dropout_ffn(src)
+        src = src + shortcut
+        src = self.norm_ffn(src)
+        ############################################################################
+        #                             END OF YOUR CODE                             #
+        ############################################################################
+        return src
