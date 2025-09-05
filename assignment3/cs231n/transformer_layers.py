@@ -159,29 +159,27 @@ class MultiHeadAttention(nn.Module):
         #     prevent a value from influencing output. Specifically, the PyTorch   #
         #     function masked_fill may come in handy.                              #
         ############################################################################
-        H = self.n_head
-        D = self.head_dim
-        Q = self.query(query).view(N, S, H, D)
-        K = self.key(key).view(N, T, H, D)
-        V = self.value(value).view(N, T, H, D)
-        Q = Q.permute(0, 2, 1, 3)
-        K = K.permute(0, 2, 1, 3)
-        V = V.permute(0, 2, 1, 3) 
-        
-        # [N, H, S, T]   
-        att = torch.matmul(Q, K.transpose(-1, -2)) / (D ** 0.5)
-        
-        if attn_mask != None:   
-          att.masked_fill_(attn_mask == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_drop(att)
-        
-        # [N, H, S, D]
-        out = torch.matmul(att, V)
-        out = out.permute(0, 2, 1, 3)
-        out = out.reshape(N, S, E) 
-        out = self.proj(out)
-        output = out 
+        H, HD = self.n_head, self.head_dim
+        Q = self.query(query).reshape(N, S, H, HD)
+        K = self.key(key).reshape(N, T, H, HD)
+        V = self.value(value).reshape(N, T, H, HD)
+
+        # (N, H, S/T, HD)
+        Q = torch.permute(Q, (0, 2, 1, 3))
+        K = torch.permute(K, (0, 2, 1, 3))
+        V = torch.permute(V, (0, 2, 1, 3))
+
+        # (N, H, T, T)
+        attn = torch.matmul(Q, K.transpose(-1, -2)) / (HD ** 0.5)
+        if attn_mask is not None:
+            attn = attn.masked_fill(attn_mask == 0, float('-inf'))
+
+        attn = torch.softmax(attn, dim=-1)
+        attn = self.attn_drop(attn)
+
+        output = torch.matmul(attn, V)
+        output = torch.permute(output, (0, 2, 1, 3)).reshape(N, S, E)
+        output = self.proj(output)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -282,13 +280,13 @@ class TransformerDecoderLayer(nn.Module):
         tgt = self.cross_attn(query=tgt, key=memory, value=memory)
         tgt = self.dropout_cross(tgt)
         tgt = tgt + shortcut
-        tgt = self.norm_self(tgt)
-        
-        shortcut = tgt 
+        tgt = self.norm_cross(tgt)
+
+        shortcut = tgt
         tgt = self.ffn(tgt)
         tgt = self.dropout_ffn(tgt)
         tgt = tgt + shortcut
-        tgt = self.norm_ffn(tgt) 
+        tgt = self.norm_ffn(tgt)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
